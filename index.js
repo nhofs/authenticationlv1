@@ -6,6 +6,7 @@ import bcrypt from "bcrypt";
 import session from "express-session";
 import passport from "passport";
 import { Strategy } from "passport-local";
+import { Strategy as GoogleStrategy } from "passport-google-oauth2";
 
 dotenv.config();
 
@@ -14,11 +15,11 @@ const port = 3000;
 const saltRounds = 10;
 
 const db = new pg.Client({
-  user: "postgres",
-  host: "localhost",
-  database: "secrets",
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME,
   password: process.env.DB_PASSWORD,
-  port: 5432,
+  port: process.env.DB_PORT,
 });
 db.connect();
 
@@ -39,6 +40,25 @@ app.use(passport.session());
 app.get("/", (req, res) => {
   res.render("home.ejs");
 });
+
+app.get("/logout", (req, res) => {
+  req.logout((err) => {
+    if (err) console.log(err);
+    else res.redirect("/");
+  });
+});
+app.get(
+  "/auth/google",
+  passport.authenticate("google", { scope: ["profile", "email"] })
+);
+
+app.get(
+  "/auth/google/secrets",
+  passport.authenticate("google", {
+    successRedirect: "/secrets",
+    failureRedirect: "/login",
+  })
+);
 
 app.get("/login", (req, res) => {
   res.render("login.ejs");
@@ -129,6 +149,39 @@ passport.use(
   })
 );
 
+passport.use(
+  "google",
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: "http://localhost:3000/auth/google/secrets",
+      userProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo",
+    },
+    async (accessToken, refreshToken, profile, cb) => {
+      try {
+        const result = await db.query("SELECT * FROM users WHERE email = $1", [
+          profile.email,
+        ]);
+        if (result.rows.length > 0) {
+          return cb(null, result.rows[0]);
+        } else {
+          try {
+            const newUser = await db.query(
+              "INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *",
+              [profile.email, "google"]
+            );
+            return cb(null, newUser.rows[0]);
+          } catch (err) {
+            return cb(err);
+          }
+        }
+      } catch (err) {
+        return cb(err);
+      }
+    }
+  )
+);
 passport.serializeUser(function (user, cb) {
   cb(null, user);
 });
